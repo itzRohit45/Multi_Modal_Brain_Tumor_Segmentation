@@ -1,65 +1,62 @@
-# Text-Guided Brain Tumor Segmentation using Vision-Language Models 🧠
+# Text-Guided Brain Tumor Segmentation using Vision-Language Models
 
-**TG-SwinUNet: A Multimodal Deep Learning System for Medical Image Segmentation**
+## Introduction
+Brain tumor segmentation from Magnetic Resonance Imaging (MRI) is a critical step in clinical diagnosis, surgical planning, and post-operative monitoring. Traditional deep learning approaches rely entirely on visual feature extraction. However, in clinical practice, radiologists evaluate MRI scans in conjunction with prior knowledge and written clinical descriptions. 
 
-![Project Status](https://img.shields.io/badge/Status-Completed-success) 
-![Architecture](https://img.shields.io/badge/Architecture-Swin%20Transformer%20%2B%20BioViL--T-blue)
+This project bridges this gap by introducing **TG-SwinUNet** (Text-Guided Swin-UNet), a highly sophisticated Vision-Language Model (VLM) for the BraTS 2020 challenge. The model takes multi-slice FLAIR MRI volumes and their corresponding patient-level radiology text descriptions as joint input to explicitly condition spatial segmentation on clinical language.
 
-Traditional brain tumor segmentation models rely entirely on visual feature extraction. However, in clinical practice, radiologists evaluate MRI scans in conjunction with written clinical descriptions. This project bridges that gap by introducing **TG-SwinUNet**, a Vision-Language Model (VLM) that feeds textual radiology reports directly into the neural network to explicitly guide the AI in drawing sharper, more accurate tumor boundaries.
+## Key Features & Contributions
+* **Pseudo-3D Visual Encoding:** Utilizes a Swin-Transformer (Tiny) backbone to process 5-slice stacked MRI inputs, extracting global spatial context without the heavy memory overhead of true 3D CNNs.
+* **Domain-Adapted Text Encoding:** Employs the BioViL-T (BiomedVLP-CXR-BERT) model with partial unfreezing (layers 8-11) to adapt to brain MRI vocabulary without catastrophic forgetting.
+* **Multi-stage Multimodal Fusion:** 
+  * Early-stage Feature-wise Linear Modulation (FiLM) layers.
+  * Bottleneck Cross-Attention mapping explicit textual semantics to 7x7 spatial feature grids.
+  * Text-Guided Attention Gates (TGAG) acting on skip-connections to filter irrelevant spatial noise.
+* **Custom Compound Loss Function:** Combines Dice, Focal, Deep Supervision, Boundary Loss, and a CLIP-style Contrastive Alignment Loss.
 
----
+## Dataset and Preprocessing
+The model is trained and evaluated on a paired text-image variation of the Brain Tumor Segmentation (BraTS) 2020 challenge dataset.
+* **Image Data:** 2D axial FLAIR slices extracted from 344 patients (258 train, 86 validation).
+* **Text Data:** Synthesized radiology reports corresponding to patient directories.
+* **Preprocessing Pipeline:** 
+  * Volumes resized to 128 x 128 x 128.
+  * Foreground Z-Score Normalization applied.
+  * Strict slice filtering: Slices containing fewer than 50 tumor pixels are removed to ensure robust gradient descent.
+  * Text tokenized to exactly 128 tokens using specialized medical Byte-Pair Encoding.
 
-## 🏗 Architecture Overview
+## Architecture Deep-Dive
+The TG-SwinUNet operates via four primary subsystems:
 
-The architecture features a dual-encoder design that mathematically aligns visual and semantic spaces:
+1. **Image Encoder:** A Swin-Tiny backbone projects the 5-slice input to 3 channels via a 1x1 convolution, extracting hierarchical features at four distinct spatial resolutions.
+2. **Text Encoder:** The 128 text tokens yield a global CLS embedding and sequence embeddings, which are then passed through a Projection MLP to map 768-D embeddings down to a 256-D shared latent space.
+3. **Fusion Mechanisms:** The text CLS token modulates visual features via FiLM at shallow encoder layers, while the sequence embeddings act as Keys/Values in the Cross-Attention bottleneck where visual patches act as Queries.
+4. **Decoder:** A transposed convolution decoder utilizing Text-Guided Attention Gates (TGAG) to condition spatial skip-connections and mute irrelevant background signal.
 
-1. **Visual Encoder (Swin Transformer):** Processes a 5-slice pseudo-3D FLAIR MRI window using Shifted Window Self-Attention to extract hierarchical spatial features.
-2. **Text Encoder (BioViL-T):** A specialized Medical BERT. Layers 0–7 are frozen to retain general medical English, while layers 8–11 are trainable for specific Brain MRI domain adaptation.
-3. **Multi-Level FiLM Fusion:** Early skip connections in the Swin Encoder are explicitly modulated (scaled and shifted) by the global text embedding.
-4. **Cross-Attention Bottleneck:** At the deepest $7 \times 7$ layer, the visual image patches act as *Queries* to attend over the 128-token *Key/Value* text sequence.
-5. **Text-Guided Attention Gates (TGAG):** Inside the decoder, skip-connection features are filtered by an attention mask generated directly from the text embedding, muting irrelevant background noise.
+## Loss Formulation
+The network is optimized using a compound loss structure designed specifically for complex morphological segmentation:
 
-## 📊 Compound Loss Function
+L_Total = L_Seg(Final) + 0.5 * L_Seg(Dec3) + 0.25 * L_Seg(Dec4) + 0.2 * L_Boundary + 0.1 * L_Contrastive
 
-To stabilize training and enforce multi-modal alignment, the model uses a massive custom loss function:
+Where L_Seg is the sum of Dice Loss and Focal Loss. Deep Supervision at blocks Dec3 and Dec4 mitigates vanishing gradients. Boundary Loss heavily penalizes edge misclassifications, and Contrastive Loss ensures textual and visual embeddings map to the exact same semantic vector space.
 
-$$ \mathcal{L}_\text{Total} = \mathcal{L}_\text{Seg}(\text{Final}) + 0.5\mathcal{L}_\text{Seg}(\text{Dec3}) + 0.25\mathcal{L}_\text{Seg}(\text{Dec4}) + 0.2\mathcal{L}_\text{Boundary} + 0.1\mathcal{L}_\text{Contrastive} $$
+## Results & Ablation Study
+The multimodal architecture was evaluated against a structurally identical Image-Only baseline to rigorously prove the value of textual conditioning.
 
-*   **Segmentation Loss (Dice + Focal):** Optimizes volume overlap and penalizes hard-to-predict pixels.
-*   **Deep Supervision:** Mini-predictions at intermediate decoder blocks (`Dec3`, `Dec4`) force early layers to learn semantic tumor boundaries quickly.
-*   **Boundary Loss:** A $6\times$ morphological penalty that specifically optimizes the Hausdorff Distance to guarantee sharp edges.
-*   **Contrastive Alignment Loss:** A CLIP-style cosine similarity loss that forces the high-dimensional Image Embeddings and Text Embeddings to mathematically converge in a shared 256-D latent space.
-
----
-
-## 💾 Dataset Details
-
-We utilized a paired text-image variation of the **Brain Tumor Segmentation (BraTS) 2020** challenge dataset.
-
-*   **Image Modality:** 2D axial slices extracted from 3D FLAIR MRI volumes.
-*   **Text Modality:** Synthesized radiology reports describing tumor location and properties.
-*   **Total Patients:** 344 text-matched patient directories (258 train, 86 validation).
-*   **Pre-processing:** Volumes resized to $128 \times 128 \times 128$. Slices containing fewer than 50 tumor pixels were removed to ensure training stability.
-
----
-
-## 📈 Final Results
-
-An exhaustive ablation study was conducted against a structurally identical Image-Only baseline to mathematically prove the benefit of Natural Language Processing.
-
-| Metric | Image-Only Baseline | Multimodal (TG-SwinUNet) | Improvement |
+| Metric | Image-Only Baseline | Multimodal (TG-SwinUNet) | Absolute Improvement |
 | :--- | :---: | :---: | :---: |
-| **Dice Score** | 0.846 | **0.856** | `+0.010` |
-| **IoU** | 0.765 | **0.776** | `+0.011` |
-| **Hausdorff Distance** | 22.978 | **21.662** | `-1.316` |
-| **Recall (Sensitivity)**| 0.857 | **0.870** | `+0.013` |
+| **Dice Score** | 0.846 | **0.856** | +0.010 |
+| **Intersection over Union (IoU)** | 0.765 | **0.776** | +0.011 |
+| **Hausdorff Distance** | 22.978 | **21.662** | -1.316 |
+| **Precision** | 0.874 | 0.874 | 0.000 |
+| **Recall (Sensitivity)** | 0.857 | **0.870** | +0.013 |
 
-By physically examining **Grad-CAM heatmaps** and **t-SNE clusters**, the model demonstrably proves that textual guidance directly influences the spatial focus of the decoder, resulting in highly accurate predictions even on morphologically complex neuro-oncological scans.
+Rigorous explainability testing (Grad-CAM and t-SNE) physically confirmed that the Text and Image features converge towards each other, proving that the NLP data explicitly guides the spatial segmentation boundaries.
 
----
+## Repository Files
+* `Brain_Tumor.ipynb`: Core source code containing PyTorch dataloaders, the TG-SwinUNet architecture, loss functions, training loop, and evaluation/explainability metric generation.
+* `report.tex`: Comprehensive academic report detailing the exact methodology.
+* `*.png` / `*.svg`: High-resolution architectural diagrams and output plots.
 
-## 📂 Repository Structure
-
-*   `Brain_Tumor.ipynb`: The master Jupyter Notebook containing the data pipelines, model definitions, training loops, and visualization generation code.
-*   `report.tex`: The comprehensive academic LaTeX report detailing the exact methodology, preprocessing, and mathematical proofs.
-*   `*.png / *.svg`: High-resolution visual diagrams of the internal subsystems and macro architecture.
+## Authors
+* Rohit Kumar (CS23B2053)
+* Sarvan Kumar (ME23B1065)
