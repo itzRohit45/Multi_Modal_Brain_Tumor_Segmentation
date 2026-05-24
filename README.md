@@ -25,19 +25,26 @@ The model is trained and evaluated on a paired text-image variation of the Brain
   * Text tokenized to exactly 128 tokens using specialized medical Byte-Pair Encoding.
 
 ## Architecture Deep-Dive
-The TG-SwinUNet operates via four primary subsystems:
+The TG-SwinUNet represents a fundamental shift from traditional unimodal segmentation, operating via four meticulously integrated subsystems:
 
-1. **Image Encoder:** A Swin-Tiny backbone projects the 5-slice input to 3 channels via a 1x1 convolution, extracting hierarchical features at four distinct spatial resolutions.
-2. **Text Encoder:** The 128 text tokens yield a global CLS embedding and sequence embeddings, which are then passed through a Projection MLP to map 768-D embeddings down to a 256-D shared latent space.
-3. **Fusion Mechanisms:** The text CLS token modulates visual features via FiLM at shallow encoder layers, while the sequence embeddings act as Keys/Values in the Cross-Attention bottleneck where visual patches act as Queries.
-4. **Decoder:** A transposed convolution decoder utilizing Text-Guided Attention Gates (TGAG) to condition spatial skip-connections and mute irrelevant background signal.
+1. **Visual Encoding via Swin Transformer:** Instead of standard CNNs, the model utilizes a hierarchical `Swin-Tiny` backbone. By employing Shifted Window Self-Attention, the encoder effectively captures global anatomical context across four spatial resolutions, projecting the 5-channel pseudo-3D MRI input into a rich 7x7x768 bottleneck feature map.
+2. **Domain-Adaptive Text Encoding (BioViL-T):** Clinical reports are tokenized and processed through a Medical BERT. To achieve domain adaptation without catastrophic forgetting, layers 0-7 are frozen to retain general medical English, while layers 8-11 are fine-tuned for neuro-oncology. The resulting embeddings are passed through a Projection MLP to achieve a shared 256-D latent space.
+3. **Multi-Scale Modality Fusion:** 
+    * **Early Fusion (FiLM):** Feature-wise Linear Modulation applies scaling and shifting to the shallow visual features based directly on the text `CLS` token, acting as a semantic filter.
+    * **Bottleneck Cross-Attention:** At the deepest encoder level, the visual patches act as *Queries* against the text tokens (*Keys/Values*), enabling explicit word-to-pixel mapping.
+4. **Text-Guided Decoder:** The transposed convolution decoder is upgraded with Text-Guided Attention Gates (TGAG). These gates intercept standard skip-connections, utilizing the text embeddings to generate spatial attention masks that actively suppress irrelevant background signals before upsampling.
 
-## Loss Formulation
-The network is optimized using a compound loss structure designed specifically for complex morphological segmentation:
+## Compound Loss Formulation
+Optimizing a multimodal network for highly irregular tumor boundaries requires a specialized loss landscape. The model is trained using a massive compound loss function designed to penalize distinct failure modes simultaneously:
 
+```text
 L_Total = L_Seg(Final) + 0.5 * L_Seg(Dec3) + 0.25 * L_Seg(Dec4) + 0.2 * L_Boundary + 0.1 * L_Contrastive
+```
 
-Where L_Seg is the sum of Dice Loss and Focal Loss. Deep Supervision at blocks Dec3 and Dec4 mitigates vanishing gradients. Boundary Loss heavily penalizes edge misclassifications, and Contrastive Loss ensures textual and visual embeddings map to the exact same semantic vector space.
+* **Segmentation Loss (`L_Seg`):** A combination of standard **Dice Loss** (optimizing volume overlap) and **Focal Loss** (penalizing hard-to-predict, class-imbalanced pixels at the tumor fringe).
+* **Deep Supervision (`Dec3`, `Dec4`):** Auxiliary segmentation heads extract intermediate predictions from the decoder. This provides direct gradient pathways to the deep layers, combating the vanishing gradient problem and accelerating convergence.
+* **Boundary Loss (`L_Boundary`):** Standard Dice loss often fails on sharp contours. This term applies a severe 6x morphological penalty to predictions that bleed over the tumor edge, strictly optimizing the Hausdorff Distance.
+* **Contrastive Alignment Loss (`L_Contrastive`):** A CLIP-style temperature-scaled cosine similarity loss. This forces the 256-D Global Image Embeddings and the 256-D Text Embeddings to mathematically converge, ensuring the Vision and Language modalities operate within an identical semantic vector space.
 
 ## Results & Ablation Study
 The multimodal architecture was evaluated against a structurally identical Image-Only baseline to rigorously prove the value of textual conditioning.
